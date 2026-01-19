@@ -142,7 +142,10 @@ void dynamic_macro_play(keyrecord_t *macro_buffer, keyrecord_t *macro_end, int8_
 #endif
 
     while (macro_buffer != macro_end) {
-        process_record(macro_buffer);
+        // Leverage a temporary record copy to enusre any mutation
+        // within process_record doesn't persist within the buffer.
+        keyrecord_t record = *macro_buffer;
+        process_record(&record);
         macro_buffer += direction;
 #ifdef DYNAMIC_MACRO_DELAY
         wait_ms(DYNAMIC_MACRO_DELAY);
