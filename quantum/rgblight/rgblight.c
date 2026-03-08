@@ -1054,7 +1054,7 @@ void rgblight_timer_task(void) {
         if (animation_status.restart) {
             animation_status.restart    = false;
             animation_status.last_timer = sync_timer_read();
-            animation_status.pos16      = 0; // restart signal to local each effect
+            // [Don't reset animation] animation_status.pos16      = 0; // restart signal to local each effect
         }
         uint16_t now = sync_timer_read();
         if (timer_expired(now, animation_status.last_timer)) {
