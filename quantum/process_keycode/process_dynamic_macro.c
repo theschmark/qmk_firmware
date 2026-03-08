@@ -19,6 +19,7 @@
 #include "process_dynamic_macro.h"
 #include <stddef.h>
 #include "action_layer.h"
+#include "action_util.h"
 #include "keycodes.h"
 #include "debug.h"
 #include "wait.h"
@@ -94,6 +95,10 @@ static layer_state_t dm1_layer_state;
 static layer_state_t dm2_layer_state;
 #endif
 
+bool keyequal(keypos_t a, keypos_t b) {
+    return (a.col == b.col && a.row == b.row);
+}
+
 /**
  * Start recording of the dynamic macro.
  *
@@ -105,13 +110,7 @@ void dynamic_macro_record_start(keyrecord_t **macro_pointer, keyrecord_t *macro_
 
     dynamic_macro_record_start_kb(direction);
 
-#ifdef DYNAMIC_MACRO_KEEP_ORIGINAL_LAYER_STATE
-    if (direction == 1) {
-        dm1_layer_state = layer_state;
-    } else if (direction == -1) {
-        dm2_layer_state = layer_state;
-    }
-#else
+#ifndef DYNAMIC_MACRO_KEEP_ORIGINAL_LAYER_STATE
     layer_clear();
 #endif
     clear_keyboard();
@@ -142,7 +141,9 @@ void dynamic_macro_play(keyrecord_t *macro_buffer, keyrecord_t *macro_end, int8_
 #endif
 
     while (macro_buffer != macro_end) {
+        keyrecord_t save = *macro_buffer;
         process_record(macro_buffer);
+        *macro_buffer = save;
         macro_buffer += direction;
 #ifdef DYNAMIC_MACRO_DELAY
         wait_ms(DYNAMIC_MACRO_DELAY);
@@ -164,8 +165,9 @@ void dynamic_macro_play(keyrecord_t *macro_buffer, keyrecord_t *macro_end, int8_
  * @param macro2_end[in] The end of the other macro.
  * @param direction[in]  Either +1 or -1, which way to iterate the buffer.
  * @param record[in]     The current keypress.
+ * @param layer_save[out]  The layer state that should be saved if this is the first key.
  */
-void dynamic_macro_record_key(keyrecord_t *macro_buffer, keyrecord_t **macro_pointer, keyrecord_t *macro2_end, int8_t direction, keyrecord_t *record) {
+void dynamic_macro_record_key(keyrecord_t *macro_buffer, keyrecord_t **macro_pointer, keyrecord_t *macro2_end, int8_t direction, keyrecord_t *record, layer_state_t *layer_save) {
     /* If we've just started recording, ignore all the key releases. */
     if (!record->event.pressed && *macro_pointer == macro_buffer) {
         dprintln("dynamic macro: ignoring a leading key-up event");
@@ -176,8 +178,29 @@ void dynamic_macro_record_key(keyrecord_t *macro_buffer, keyrecord_t **macro_poi
      * is safe to use before overwriting the other macro.
      */
     if (*macro_pointer - direction != macro2_end) {
-        **macro_pointer = *record;
-        *macro_pointer += direction;
+        // Skip if the record has the exact same timestamp as the previous key, as it was not a physical press.
+        // Don't check this if we're at the first key.
+        if (*macro_pointer != macro_buffer &&
+            (*macro_pointer - direction)->event.time == record->event.time &&
+            keyequal((*macro_pointer - direction)->event.key, record->event.key)) {
+            //skip update
+            //dprintf("Skipping key %d %d at time %d", (int)record->event.key, record->event.pressed, record->event.time);
+        } else {
+            // First saved key should save the layer; first key should be a press
+            if (*macro_pointer == macro_buffer) {
+                if (record->event.pressed) {
+                    if (layer_save) {
+                        *layer_save = layer_state;
+                    }
+                    **macro_pointer = *record;
+                    *macro_pointer += direction;
+                }
+            } else {
+                **macro_pointer = *record;
+                *macro_pointer += direction;
+                //dprintf("Got key %d %d and mods %d and osl %d %d\n", (int)record->event.key, record->event.pressed, get_mods(), get_oneshot_layer_state(), get_oneshot_layer());
+            }
+        }
     }
     dynamic_macro_record_key_kb(direction, record);
 
@@ -270,7 +293,7 @@ void dynamic_macro_stop_recording(void) {
 bool process_dynamic_macro(uint16_t keycode, keyrecord_t *record) {
     if (macro_id == 0) {
         /* No macro recording in progress. */
-        if (!record->event.pressed) {
+        if (record->event.pressed) {
             switch (keycode) {
                 case QK_DYNAMIC_MACRO_RECORD_START_1:
                     dynamic_macro_record_start(&macro_pointer, macro_buffer, +1);
@@ -295,9 +318,7 @@ bool process_dynamic_macro(uint16_t keycode, keyrecord_t *record) {
             case QK_DYNAMIC_MACRO_RECORD_START_2:
             case QK_DYNAMIC_MACRO_RECORD_STOP:
                 /* Stop the macro recording. */
-                if (record->event.pressed ^ (keycode != QK_DYNAMIC_MACRO_RECORD_STOP)) { /* Ignore the initial release
-                                                                                          * just after the recording
-                                                                                          * starts for DM_RSTP. */
+                if (record->event.pressed) {
                     dynamic_macro_stop_recording();
                 }
                 return false;
@@ -312,10 +333,10 @@ bool process_dynamic_macro(uint16_t keycode, keyrecord_t *record) {
                     /* Store the key in the macro buffer and process it normally. */
                     switch (macro_id) {
                         case 1:
-                            dynamic_macro_record_key(macro_buffer, &macro_pointer, r_macro_end, +1, record);
+                            dynamic_macro_record_key(macro_buffer, &macro_pointer, r_macro_end, +1, record, &dm1_layer_state);
                             break;
                         case 2:
-                            dynamic_macro_record_key(r_macro_buffer, &macro_pointer, macro_end, -1, record);
+                            dynamic_macro_record_key(r_macro_buffer, &macro_pointer, macro_end, -1, record, &dm2_layer_state);
                             break;
                     }
                 }
